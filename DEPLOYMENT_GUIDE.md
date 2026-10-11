@@ -316,3 +316,17 @@ ls -lh app/build/outputs/bundle/release/
 # 4. 安装到手机
 adb install -r -d app/build/outputs/apk/release/app-arm64-v8a-release.apk
 ```
+
+## 分支 push 自动出 debug APK（Amapauto → `debug-latest`）
+
+2026-10-11 起，**向 `Amapauto` 分支 push 代码即自动出一个可直接安装的 debug APK**（不需要打 tag、不需要手动 dispatch）。
+
+- 产物位置：Releases 的**滚动 prerelease** `debug-latest` → <https://github.com/FOREVERZAX1988/navipilot/releases/tag/debug-latest>
+  - `app-arm64-v8a-debug.apk` / `app-armeabi-v7a-debug.apk` / `app-x86_64-debug.apk`（多 ABI 拆包）
+  - `sp-dazi-debug-r<versionCode>.zip`（一次打包全部 APK）
+- versionCode = UTC 日期 `yyMMdd`（如 `261011`），versionName = `v261011-debug-<sha7>` → 天然大于线上版本，**不会被系统拒装**
+- **签名**：仓库配了 4 个签名 secret 时，debug 变体也用 **release keystore** 签（`-Pnavipilot.debugSign=release`）→ 与我们已装的 release 包**同签名，可直接覆盖安装，不用卸载**；secret 缺失时回退内置 debug key（此时装到有 release 包的机器上需要先卸载）
+- 手动出包：Actions → Build and Release → Run workflow → 勾 **`build_debug`**（`workflow_dispatch` 读的是**默认分支**的 workflow，所以 `master` 上的 `release.yml` 也要保持同步）
+- 正式发版不变：打 tag `r<versionCode>` 或 dispatch 不勾 `build_debug`
+
+> ⚠️ 与作者的「特投屏（Map2Tesla）」包关系：两者 **applicationId 相同**（`com.jixiexiaoge.drivingassist`），但**签名不同**，且对方 versionCode 是 8 位（`YYMMDDNN`，如 `26093008`）大于我们的 6 位（`260902`）→ 两边的包**不能共存**，互相覆盖装需要先卸载。
