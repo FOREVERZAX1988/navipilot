@@ -23,12 +23,23 @@ jobs:
     permissions:
       contents: write
     env:
-      VERSION_CODE: ${{ github.event.inputs.version_code || github.ref_name }}
-      VERSION_NAME: ${{ github.event.inputs.version_name || github.ref_name }}
       NOTES: ${{ github.event.inputs.notes || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve version
+        run: |
+          RAW="${{ github.event.inputs.version_code || github.ref_name }}"
+          CODE="${RAW#r}"
+          case "$CODE" in
+            ''|*[!0-9]*) echo "::error::versionCode 非法: $RAW"; exit 1 ;;
+          esac
+          NAME="${{ github.event.inputs.version_name }}"
+          if [ -z "$NAME" ]; then NAME="v$CODE"; fi
+          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "versionCode=$CODE versionName=$NAME"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -37,10 +48,16 @@ jobs:
           java-version: 17
 
       - name: Decode release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
           mkdir -p app
-          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > app/release.keystore
-        # 如果仓库没有配置 secrets，这里会失败；本地调试请使用 debug 签名
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > app/release.keystore
+          fi
+          test -s app/release.keystore || {
+            echo "::error::release keystore 缺失：secret RELEASE_KEYSTORE_BASE64 未配置"; exit 1; }
+          echo "keystore bytes: $(wc -c < app/release.keystore)"
 
       - name: Make gradlew executable
         run: chmod +x gradlew
