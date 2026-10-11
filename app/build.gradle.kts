@@ -97,6 +97,12 @@ android {
             )
         }
         debug {
+            // CI：-Pnavipilot.debugSign=release 时把 debug 变体也用 release keystore 签，
+            // 这样 debug APK 与我们已安装的 release 包**同签名**，可直接覆盖安装（不必卸载重装）。
+            // 未传该属性（本地开发）时保持内置 debug key 签名。
+            if ((project.findProperty("navipilot.debugSign") as String?) == "release") {
+                signingConfig = signingConfigs.getByName("release")
+            }
             // 体积优化：debug 亦开 R8 + 资源裁剪（本地环测无需热重载）
             isMinifyEnabled = true
             isShrinkResources = true
