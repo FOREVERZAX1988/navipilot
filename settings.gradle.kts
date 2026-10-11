@@ -1,8 +1,12 @@
 pluginManagement {
     repositories {
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+        // 阿里云镜像：国内本机加速用；GitHub Actions 上镜像偶发 502 会让整个构建
+        // 直接失败（Gradle 会 disable 掉出错的 repo），因此 CI（env CI=true）跳过镜像。
+        if (System.getenv("CI").isNullOrEmpty()) {
+            maven { url = uri("https://maven.aliyun.com/repository/google") }
+            maven { url = uri("https://maven.aliyun.com/repository/public") }
+            maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+        }
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
@@ -17,8 +21,10 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
+        if (System.getenv("CI").isNullOrEmpty()) {
+            maven { url = uri("https://maven.aliyun.com/repository/google") }
+            maven { url = uri("https://maven.aliyun.com/repository/public") }
+        }
         google()
         mavenCentral()
         // 腾讯导航SDK Maven仓库
@@ -30,4 +36,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "Navipilot"
 include(":app")
- 

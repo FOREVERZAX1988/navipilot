@@ -59,6 +59,20 @@ jobs:
             echo "::error::release keystore 缺失：secret RELEASE_KEYSTORE_BASE64 未配置"; exit 1; }
           echo "keystore bytes: $(wc -c < app/release.keystore)"
 
+      - name: Normalize + verify keystore (fail fast, 秒级)
+        env:
+          PW: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          # keytool 回写一遍：既验证 store/key 密码与 alias 能否被 Java 读出（我们的
+          # keystore 是免 keytool 生成的 JKS），也顺便规范成 Java 原生 JKS。
+          keytool -importkeystore -noprompt \
+            -srckeystore app/release.keystore -srcstorepass "$PW" -srcalias "$ALIAS" -srckeypass "$PW" \
+            -destkeystore app/release.norm.keystore -deststoretype JKS \
+            -deststorepass "$PW" -destalias "$ALIAS" -destkeypass "$PW"
+          mv app/release.norm.keystore app/release.keystore
+          keytool -list -keystore app/release.keystore -storepass "$PW" | grep -F "$ALIAS"
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
