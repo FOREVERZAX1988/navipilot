@@ -79,9 +79,13 @@ jobs:
             -PversionName=$VERSION_NAME \
             -Pnavipilot.abis=arm64-v8a,armeabi-v7a,x86_64
         env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          # 必须是 ORG_GRADLE_PROJECT_ 前缀：Gradle 只把 -P / gradle.properties /
+          # ORG_GRADLE_PROJECT_* 环境变量认成 project property。
+          # 直接写 RELEASE_* 环境变量的话，build.gradle.kts 里的 resolve() 拿到空串，
+          # 表现为 packageRelease 报 "Failed to read key  from store ... tampered"。
+          ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
 
       - name: Build signed Release AAB
         run: |
@@ -90,9 +94,13 @@ jobs:
             -PversionCode=$VERSION_CODE \
             -PversionName=$VERSION_NAME
         env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          # 必须是 ORG_GRADLE_PROJECT_ 前缀：Gradle 只把 -P / gradle.properties /
+          # ORG_GRADLE_PROJECT_* 环境变量认成 project property。
+          # 直接写 RELEASE_* 环境变量的话，build.gradle.kts 里的 resolve() 拿到空串，
+          # 表现为 packageRelease 报 "Failed to read key  from store ... tampered"。
+          ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
 
       - name: Align and verify APKs
         run: |
