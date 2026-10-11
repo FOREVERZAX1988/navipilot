@@ -4,21 +4,148 @@ on:
   workflow_dispatch:
     inputs:
       version_code:
-        description: 'versionCode (must be greater than latest, e.g. 260901)'
-        required: true
+        description: 'versionCode (release 必需，必须大于线上版本，如 260901)'
+        required: false
       version_name:
-        description: 'versionName (e.g. v260901)'
-        required: true
+        description: 'versionName (如 v260901)'
+        required: false
       notes:
         description: 'Release notes'
         required: false
         default: ''
+      build_debug:
+        description: '只出 debug APK（立刻能装机，可覆盖安装我们的 release 包）'
+        type: boolean
+        default: false
   push:
+    branches:
+      - Amapauto        # 分支 push → 直接出 debug APK（不需要 tag，不需要 dispatch）
     tags:
-      - 'r*'
+      - 'r*'            # tag push → 正式多 ABI release APK + AAB + GitHub Release
 
 jobs:
-  build:
+  # =====================================================================
+  # debug APK：Amapauto 分支 push 的默认产物 —— 立刻能装机
+  #  - 用 release keystore 签（同签名，能直接覆盖我们已装的 release 包，不用卸载）
+  #  - versionCode 取 UTC 日期（yyMMdd），天然大于已发布版本，不会被拒装
+  #  - 落到滚动的 prerelease tag `debug-latest`，免登录下载
+  # =====================================================================
+  debug-apk:
+    if: (github.event_name == 'push' && github.ref_type == 'branch') || github.event.inputs.build_debug == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve debug version
+        run: |
+          CODE="$(date -u +%y%m%d)"
+          NAME="v${CODE}-debug-$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          echo "VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "debug versionCode=$CODE versionName=$NAME"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Decode release keystore (可选，缺失则用内置 debug key)
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          PW: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          mkdir -p app
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > app/release.keystore
+            keytool -importkeystore -noprompt \
+              -srckeystore app/release.keystore -srcstorepass "$PW" -srcalias "$ALIAS" -srckeypass "$PW" \
+              -destkeystore app/release.norm.keystore -deststoretype JKS \
+              -deststorepass "$PW" -destalias "$ALIAS" -destkeypass "$PW"
+            mv app/release.norm.keystore app/release.keystore
+            echo "SIGN_WITH=release" >> "$GITHUB_ENV"
+            echo "keystore ok: $(wc -c < app/release.keystore) bytes"
+          else
+            echo "::notice::RELEASE_KEYSTORE_BASE64 未配置 → debug APK 用内置 debug key 签名（不能覆盖 release 安装，需先卸载）"
+            echo "SIGN_WITH=debug" >> "$GITHUB_ENV"
+          fi
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-debug-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Build debug APK (multi-ABI)
+        run: |
+          ./gradlew assembleDebug \
+            --no-daemon \
+            -PversionCode=$VERSION_CODE \
+            -PversionName=$VERSION_NAME \
+            -Pnavipilot.abis=arm64-v8a,armeabi-v7a,x86_64 \
+            -Pnavipilot.debugSign=$SIGN_WITH
+        env:
+          # 必须是 ORG_GRADLE_PROJECT_ 前缀，Gradle 才当 project property 读
+          ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+
+      - name: Collect debug artifacts
+        run: |
+          mkdir -p debug-assets
+          ls -lh app/build/outputs/apk/debug/
+          cp app/build/outputs/apk/debug/*.apk debug-assets/
+          cd debug-assets
+          zip -9 "../sp-dazi-debug-r${VERSION_CODE}.zip" *.apk
+          cd ..
+          ls -lh debug-assets/ sp-dazi-debug-r${VERSION_CODE}.zip
+
+      - name: Upload debug artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sp-dazi-debug-r${{ env.VERSION_CODE }}
+          path: |
+            debug-assets/*.apk
+            sp-dazi-debug-r*.zip
+          if-no-files-found: error
+
+      - name: Publish rolling prerelease `debug-latest`
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="debug-latest"
+          NOTES="自动构建（Amapauto push）\n\ncommit: ${GITHUB_SHA}\nversionCode: ${VERSION_CODE}\nversionName: ${VERSION_NAME}\nsigned: ${SIGN_WITH}\n时间: $(date -u +%FT%TZ)"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" debug-assets/*.apk "sp-dazi-debug-r${VERSION_CODE}.zip" --clobber
+            gh release edit "$TAG" --title "sp搭子 debug APK (自动构建)" --notes "$(printf "$NOTES")"
+          else
+            gh release create "$TAG" \
+              --title "sp搭子 debug APK (自动构建)" \
+              --notes "$(printf "$NOTES")" \
+              --prerelease \
+              --target "${GITHUB_SHA}" \
+              debug-assets/*.apk "sp-dazi-debug-r${VERSION_CODE}.zip"
+          fi
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f app/release.keystore
+
+  # =====================================================================
+  # 正式 release：tag r* 或手动 dispatch —— 多 ABI release APK + AAB + Release
+  # =====================================================================
+  release:
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && github.event.inputs.build_debug != 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -59,6 +186,20 @@ jobs:
             echo "::error::release keystore 缺失：secret RELEASE_KEYSTORE_BASE64 未配置"; exit 1; }
           echo "keystore bytes: $(wc -c < app/release.keystore)"
 
+      - name: Normalize + verify keystore (fail fast, 秒级)
+        env:
+          PW: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          # keytool 回写一遍：既验证 store/key 密码与 alias 能否被 Java 读出（我们的
+          # keystore 是免 keytool 生成的 JKS），也顺便规范成 Java 原生 JKS。
+          keytool -importkeystore -noprompt \
+            -srckeystore app/release.keystore -srcstorepass "$PW" -srcalias "$ALIAS" -srckeypass "$PW" \
+            -destkeystore app/release.norm.keystore -deststoretype JKS \
+            -deststorepass "$PW" -destalias "$ALIAS" -destkeypass "$PW"
+          mv app/release.norm.keystore app/release.keystore
+          keytool -list -keystore app/release.keystore -storepass "$PW" | grep -F "$ALIAS"
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
@@ -79,9 +220,13 @@ jobs:
             -PversionName=$VERSION_NAME \
             -Pnavipilot.abis=arm64-v8a,armeabi-v7a,x86_64
         env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          # 必须是 ORG_GRADLE_PROJECT_ 前缀：Gradle 只把 -P / gradle.properties /
+          # ORG_GRADLE_PROJECT_* 环境变量认成 project property。
+          # 直接写 RELEASE_* 环境变量的话，build.gradle.kts 里的 resolve() 拿到空串，
+          # 表现为 packageRelease 报 "Failed to read key  from store ... tampered"。
+          ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
 
       - name: Build signed Release AAB
         run: |
@@ -90,9 +235,9 @@ jobs:
             -PversionCode=$VERSION_CODE \
             -PversionName=$VERSION_NAME
         env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
 
       - name: Align and verify APKs
         run: |
